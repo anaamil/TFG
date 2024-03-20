@@ -4,7 +4,7 @@ import sys
 from glob import glob
 import os
 import numpy as np
-import Gradient_data
+from temporal import Gradient_data
 
 
 def is_isomeric(smiles):
@@ -54,7 +54,8 @@ def access_data(pattern, location=".*"):
             df_data["index"] = df_data.index.str[0:4].astype(int)
             df = pd.merge(df_data, column_data, left_on="index", right_index=True, how="left")
             df.drop(columns=["index"], inplace=True)
-            df.to_csv("../../final_data.tsv", sep='\t', index=True)
+            #df.to_csv("../../final_data.tsv", sep='\t', index=True)
+            return df
         else:
             print(f'No matches found with {pattern}')
     except Exception as e:
