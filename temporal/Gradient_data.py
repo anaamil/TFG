@@ -1,29 +1,30 @@
 import re
 import pandas as pd
-import sys
 from glob import glob
 import os
 import numpy as np
 
 
 def delete_eluent(gra_data, elu_data):
-    """Restructure dataframe with chromatographic columns data
+    """
+    Processes gradient and eluent data.
 
-    Keywords arguments:
-    gra_data --
-    elu_data --
+    This function retains the data for the two most concentrated eluents and removes the remaining ones.
+
+    Args:
+        gra_data (DataFrame): A DataFrame containing gradient data
+        elu_data (DataFrame): A DataFrame containing eluent data
+
+    Returns:
+        list: A list containing processed gradient and eluent data from each experiment
     """
     try:
         gra_data = gra_data.set_index("file")
         result = []
         for pos in range(gra_data.shape[0]):
             row = gra_data.iloc[pos, :]
-            if len(row.iloc[1:5][row != 0]) >= 2:
-                sort_row = row.iloc[1:5].sort_values(ascending=False)
-                drop_columns = sort_row[2:].index
-            else:
-                sort_row = row.iloc[1:5].sort_values(ascending=False)
-                drop_columns = sort_row[2:].index
+            sort_row = row.iloc[1:5].sort_values(ascending=False)
+            drop_columns = sort_row[2:].index
             gra_drop = row.drop(drop_columns)
             df = pd.concat([elu_data.loc[gra_data.index[0]], gra_drop])
             elu_drop = [i for i in df.index if drop_columns[0][0] in i or drop_columns[1][0] in i]
@@ -40,94 +41,148 @@ def delete_eluent(gra_data, elu_data):
         print(f"Error delete_eluents: {e}")
 
 
-def gradient_data():
-    """Access to eluents gradient data in each chromatographic column"""
+def gradient_data(training):
+    """
+    Access to data related to gradient used in chromatography
+
+    This function reads gradient data from TSV files in the '../data/*/' directory,
+    concatenates them into a single DataFrame, and merges them with chromatographic column metadata.
+    It obtains the maximum and minimum gradients, time intervals, and files to exclude if training is enabled.
+
+    Args:
+        training(bool): Indicates whether to perform training data processing
+
+    Returns:
+        DataFrame: A DataFrame containing processed gradient data merged with chromatographic column metadata
+    """
     try:
-        directory = glob("../processed_data/*/*.tsv")
-        gradient = []
-        time_dic = []
-        dictionary = {}
+        directory = glob("data/*/*.tsv")
+        excluded_files = []
+        list_gra = []
+        drop_file = []
+        gradient_time = {}
         column_data, eluent_data = metadata()
         for file in directory:
             if re.search(r"_gradient.tsv", file):
                 gra = pd.read_csv(file, sep='\t', header=0, encoding='utf-8')
                 file_name = int(os.path.basename(file)[0:4])
                 if gra["t [min]"].isnull().values.any() or gra["t [min]"].values.size == 0:
-                    gradient.append(f'experiment nº {file_name}')
+                    excluded_files.append(f'experiment nº {file_name}')
+                    drop_file.append(file_name)
                 else:
-                    dictionary[file_name] = gra["t [min]"].values.max(), gra.values.shape[0]
+                    gradient_time[file_name] = gra["t [min]"].values.max(), gra.values.shape[0]
                     gra["file"] = file_name
                     result = delete_eluent(gra, eluent_data)
                     df_g = pd.DataFrame(pd.concat(result)).transpose()
-                    df_merge = pd.merge(column_data, df_g, left_index=True, right_index=True, how="right")
-                    col_flowrate = [col for col in df_merge.columns if re.match(r"flow_rate *", col)]
-
-                    for col in col_flowrate:
-                        flowrate_null = df_merge[col].isnull()
-                        df_merge.loc[flowrate_null, col] = df_merge.loc[flowrate_null, "column.flowrate"]
-                    time_dic.append(df_merge)
-        df = pd.concat(time_dic, axis=0)
-        df_drop = df.iloc[:, 0:8].isnull().sum(axis=1) > 5
-        gradient.extend([f'experiment nº {i}' for i in df[df_drop].index.tolist()])
-        df = df[~df_drop]
-        df.to_csv("../../data.tsv", sep="\t", index=True)
-        df_gradient = pd.Series(gradient)
-        df_gradient.name = "nº experiments"
-        df_gradient.to_csv("../../excluded_files.tsv", index=False)
-        df_t = pd.DataFrame(data=dictionary, index=["t_max", "num"])
-        df_transpose = df_t.transpose()
-        df_transpose.to_csv("../../gradient.tsv", sep="\t", index=True)
+                    list_gra.append(df_g)
+        df_g = pd.concat(list_gra)
+        df = pd.merge(column_data, df_g, left_index=True, right_index=True, how="left")
+        col_drop = df.iloc[:, 0:8].isnull().sum(axis=1) > 5
+        drop_file.extend(df[col_drop].index.tolist())
+        excluded_files.extend([f'experiment nº {i}' for i in df[col_drop].index.tolist()])
+        excluded_files = pd.Series(excluded_files).drop_duplicates()
+        excluded_files.name = "nº experiments"
+        if training is True:
+            df = training_data(df, drop_file)
+        df_gra_time = pd.DataFrame(data=gradient_time, index=["t_max", "num"])
+        df_gra_time = df_gra_time.transpose()
+        # excluded_files.to_csv("../../excluded_files.tsv", index=False)
+        # df_gra_time.to_csv("../../excluded_files.tsv", sep="\t", index=True)
         return df
     except Exception as e:
         print(e)
 
 
-def metadata():
-    """Access to chromatographic column data"""
+def training_data(df, drop_file):
+    """
+    Processes training data.
+
+    This function fills missing values based on related columns means.
+    It calculates dead time (t0) value with "column.id", "column.length" and "column.flowrate"
+    in those columns where t0 is missing. Finally, it drops specified rows from the DataFrame.
+
+    Args:
+        df (DataFrame): DataFrame containing the data.
+        drop_file (list): List of index to drop from the DataFrame.
+
+    Returns:
+        DataFrame: Processed DataFrame after filling missing values and updating "column.t0".
+    """
     try:
-        directory = glob("../processed_data/*/*.tsv")
+        col_flowrate = [col for col in df.columns if re.match(r"flow_rate *", col)]
+        for col in col_flowrate:
+            flowrate_null = df[col].isnull()
+            df.loc[flowrate_null, col] = df.loc[flowrate_null, "column.flowrate"]
+        for column in df.columns[2:8]:
+            lines_null = df[df[column].isnull()]
+            for column_name in lines_null["column.name"]:
+                if pd.notnull(column_name):
+                    same_lines = df[df['column.name'] == column_name]
+                    mean = same_lines[column].mean()
+                    if pd.isnull(mean):
+                        same_pattern = df[df['column.name'].fillna('').str.contains(column_name[0:15])]
+                        mean = same_pattern[column].mean()
+                        if pd.isnull(mean):
+                            mean = df[column].mean()
+                    df.loc[(df[column].isnull()) & (df['column.name'] == column_name), column] = mean
+        t0_lines = df[df["column.t0"] == 0]
+        new_t0 = 0.66*np.pi*((t0_lines["column.id"]/2)**2)*t0_lines["column.length"]/(t0_lines["column.flowrate"]*10**3)
+        df.loc[new_t0.index, "column.t0"] = new_t0
+        df = df.drop(index=[i for i in pd.Series(drop_file)])
+        return df
+    except Exception as e:
+        print(f"Error training:{e}")
+
+
+def metadata():
+    """
+    Access to chromatographic column data
+
+    This function reads chromatographic column metadata from TSV files in the '../data/*/' directory,
+    concatenates them into a single DataFrame, and processes the data to ensure that all eluents are in
+    the same units (%) and to generate a new column with the number of missing values.
+
+    Returns:
+        tuple: A tuple containing two DataFrames:
+            - `column_data`: DataFrame containing metadata related to chromatographic columns,
+              including column inner diameter, name, length, temperature, etc., and a column indicating
+              the number of missing values.
+            - `eluent_data`: DataFrame containing metadata related to the eluent used in chromatography.
+              This DataFrame excludes unit-related columns and columns related to gradient data
+    """
+    try:
+        directory = glob("data/*/*.tsv")
         metadata_list = []
         for file in directory:
             if re.search(r"_metadata.tsv", file):
                 met = pd.read_csv(file, sep='\t', header=0, encoding='utf-8')
                 metadata_list.append(met)
-        df_met = pd.concat(metadata_list, ignore_index=True)
-        df_filtered = df_met.set_index("id")
-        position = [pos for pos, col in enumerate(df_filtered.columns) if "unit" in col]
+        df_metadata = pd.concat(metadata_list, ignore_index=True)
+        df_metadata = df_metadata.set_index("id")
+        position = [pos for pos, col in enumerate(df_metadata.columns) if "unit" in col]
         for pos in position:
-            if df_filtered.iloc[:, pos].notna().any() and df_filtered.iloc[:, pos].str.contains("mM").any():
-                if "nh4ac" in df_filtered.columns[pos - 1]:
-                    df_filtered.iloc[:, pos - 1] *= 0.007
-                elif "nh4form" in df_filtered.columns[pos - 1]:
-                    df_filtered.iloc[:, pos - 1] *= 0.005
-                elif "nh4carb" in df_filtered.columns[pos - 1]:
-                    df_filtered.iloc[:, pos - 1] *= 0.006
-                elif "nh4bicarb" in df_filtered.columns[pos - 1]:
-                    df_filtered.iloc[:, pos - 1] *= 0.005
-                elif "nh4form" in df_filtered.columns[pos - 1]:
-                    df_filtered.iloc[:, pos - 1] *= 0.004
-                elif "nh4oh" in df_filtered.columns[pos - 1]:
-                    df_filtered.iloc[:, pos - 1] *= 0.004
-            elif df_filtered.iloc[:, pos].notna().any() and df_filtered.iloc[:, pos].str.contains("µM").any():
-                if "phosphor" in df_filtered.columns[pos - 1]:
-                    df_filtered.iloc[:, pos - 1] *= 5.21/(10**6)
-                elif "medronic" in df_filtered.columns[pos - 1]:
-                    df_filtered.iloc[:, pos - 1] *= 8.38/(10**6)
-        for column in df_filtered.columns[2:8]:
-            lines_null = df_filtered[df_filtered[column].isnull()]
-            same_lines = df_filtered[df_filtered['column.name'].isin(lines_null["column.name"])]
-            mean = same_lines.groupby('column.name')[column].mean()
-            for index, mean in mean.items():
-                df_filtered.loc[(df_filtered[column].isnull()) & (df_filtered['column.name'] == index), column] = mean
-        columns_unit = [col for col in df_filtered.columns if '.unit' in col or "gradient." in col]
-        column_data = df_filtered.iloc[:, 0:8]
+            if df_metadata.iloc[:, pos].notna().any() and df_metadata.iloc[:, pos].str.contains("mM").any():
+                if "nh4ac" in df_metadata.columns[pos - 1]:
+                    df_metadata.iloc[:, pos - 1] *= 0.007
+                elif "nh4form" in df_metadata.columns[pos - 1]:
+                    df_metadata.iloc[:, pos - 1] *= 0.005
+                elif "nh4carb" in df_metadata.columns[pos - 1]:
+                    df_metadata.iloc[:, pos - 1] *= 0.006
+                elif "nh4bicarb" in df_metadata.columns[pos - 1]:
+                    df_metadata.iloc[:, pos - 1] *= 0.005
+                elif "nh4form" in df_metadata.columns[pos - 1]:
+                    df_metadata.iloc[:, pos - 1] *= 0.004
+                elif "nh4oh" in df_metadata.columns[pos - 1]:
+                    df_metadata.iloc[:, pos - 1] *= 0.004
+            elif df_metadata.iloc[:, pos].notna().any() and df_metadata.iloc[:, pos].str.contains("µM").any():
+                if "phosphor" in df_metadata.columns[pos - 1]:
+                    df_metadata.iloc[:, pos - 1] *= 5.21 / (10 ** 6)
+                elif "medronic" in df_metadata.columns[pos - 1]:
+                    df_metadata.iloc[:, pos - 1] *= 8.38 / (10 ** 6)
+        columns_unit = [col for col in df_metadata.columns if '.unit' in col or "gradient." in col]
+        column_data = df_metadata.iloc[:, 0:8]
         column_data["missing_values"] = column_data.isnull().sum(axis=1)
-        eluent_data = df_filtered.iloc[:, 8:].drop(columns=columns_unit)
-        df_met.to_csv("../../metadata.tsv", sep="\t", index=True)
-        df_filtered.to_csv("../../metadata_filtered.tsv", sep="\t", index=True)
+        eluent_data = df_metadata.iloc[:, 8:].drop(columns=columns_unit)
         return column_data, eluent_data
     except Exception as e:
         print(f"Error metadata:{e}")
-
-
-gradient_data()

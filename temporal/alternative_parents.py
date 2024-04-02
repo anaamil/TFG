@@ -4,9 +4,19 @@ from glob import glob
 
 
 def alternative_parents():
-    """Concatenate data between RepoRT repository and alternative parents data"""
+    """
+    Obtains alternative parents data of the molecules in RepoRTs processed data
+
+    This function searches alternative parents data from "all_classified.tsv" that contains molecules from RepoRT
+    processed data. It reads the data and matches the InChIKey values in the processed data with the InChIKey
+    values in the 'all_classified.tsv' file. It creates a DataFrame with the matched records and saves it as
+    'RepoRT_classified.tsv'.
+
+    Returns:
+        DataFrame: DataFrame containing the matched records.
+    """
     try:
-        directory = glob("../processed_data/*/*.tsv")
+        directory = glob("data/*/*.tsv")
         results = []
         df_list = []
         for files in directory:
@@ -24,9 +34,7 @@ def alternative_parents():
                     df_at = (pd.DataFrame(lines)).transpose()
                     df_list.append(pd.merge(df_query, df_at, right_on=0, left_on="inchikey.std"))
             df = pd.concat(df_list, ignore_index=True)
-            df.to_csv("alternative_parents.tsv", sep="\t", index=False)
+            # df.to_csv("../RepoRT_classified.tsv", sep="\t", index=False)
+            return df
     except Exception as e:
         print(f"Error: {e}")
-
-
-alternative_parents()
