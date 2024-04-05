@@ -61,6 +61,7 @@ def gradient_data(training):
         list_gra = []
         drop_file = []
         gradient_time = {}
+        flowrate_null = {}
         column_data, eluent_data = metadata()
         for file in directory:
             if re.search(r"_gradient.tsv", file):
@@ -74,6 +75,8 @@ def gradient_data(training):
                     gra["file"] = file_name
                     result = delete_eluent(gra, eluent_data)
                     df_g = pd.DataFrame(pd.concat(result)).transpose()
+                    col_flowrate = df_g.filter(regex="flow_rate *", axis=1)
+                    flowrate_null[df_g.index[0]] = df_g[col_flowrate.columns].isnull().columns
                     list_gra.append(df_g)
         df_g = pd.concat(list_gra)
         df = pd.merge(column_data, df_g, left_index=True, right_index=True, how="left")
@@ -83,7 +86,7 @@ def gradient_data(training):
         excluded_files = pd.Series(excluded_files).drop_duplicates()
         excluded_files.name = "nº experiments"
         if training is True:
-            df = training_data(df, drop_file)
+            df = training_data(df, drop_file, flowrate_null)
         df_gra_time = pd.DataFrame(data=gradient_time, index=["t_max", "num"])
         df_gra_time = df_gra_time.transpose()
         # excluded_files.to_csv("../../excluded_files.tsv", index=False)
@@ -93,7 +96,7 @@ def gradient_data(training):
         print(e)
 
 
-def training_data(df, drop_file):
+def training_data(df, drop_file, flowrate_null):
     """
     Processes training data.
 
@@ -104,15 +107,13 @@ def training_data(df, drop_file):
     Args:
         df (DataFrame): DataFrame containing the data.
         drop_file (list): List of index to drop from the DataFrame.
+        flowrate_null(dictionary): Dictionary containing index(key) and flow_rate columns(values)
+        from each experiment
 
     Returns:
         DataFrame: Processed DataFrame after filling missing values and updating "column.t0".
     """
     try:
-        col_flowrate = [col for col in df.columns if re.match(r"flow_rate *", col)]
-        for col in col_flowrate:
-            flowrate_null = df[col].isnull()
-            df.loc[flowrate_null, col] = df.loc[flowrate_null, "column.flowrate"]
         for column in df.columns[2:8]:
             lines_null = df[df[column].isnull()]
             for column_name in lines_null["column.name"]:
@@ -125,6 +126,8 @@ def training_data(df, drop_file):
                         if pd.isnull(mean):
                             mean = df[column].mean()
                     df.loc[(df[column].isnull()) & (df['column.name'] == column_name), column] = mean
+        for key, values in flowrate_null.items():
+            df.loc[key, values] = df.loc[key, "column.flowrate"]
         t0_lines = df[df["column.t0"] == 0]
         new_t0 = 0.66*np.pi*((t0_lines["column.id"]/2)**2)*t0_lines["column.length"]/(t0_lines["column.flowrate"]*10**3)
         df.loc[new_t0.index, "column.t0"] = new_t0

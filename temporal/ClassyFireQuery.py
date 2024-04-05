@@ -38,17 +38,17 @@ def access_data(pattern="", location=".*", training=True):
         directory = glob("data/*/*.tsv")
         results = []
         column = None
-        alt = pd.read_csv('../RepoRT_classified.tsv', sep='\t', header=0, encoding='utf-8', dtype=object)
+        alt = pd.read_csv('RepoRT_classified.tsv', sep='\t', header=0, encoding='utf-8', dtype=object)
         for file in directory:
-            df = pd.read_csv(file, sep='\t', header=0, encoding='utf-8')
-            if "classyfire.kingdom" in df.columns and not is_isomeric(df['smiles.std'].iloc[0]):
-                column = df.filter(regex=f'{location}', axis=1)
+            rt = pd.read_csv(file, sep='\t', header=0, encoding='utf-8')
+            if "classyfire.kingdom" in rt.columns and not is_isomeric(rt['smiles.std'].iloc[0]):
+                column = rt.filter(regex=f'{location}', axis=1)
                 column_string = column.select_dtypes(include=['object'])
                 for col in column_string.columns:
-                    query = column[col].str.lower().str.contains(pattern.lower(), na=False)
-                    if not df[query].empty:
-                        df_merge = df[query].merge(alt.drop(columns=[col for col in df[query].columns[1:]] + ["0"]),
-                                                   left_on="id", right_on="id",  how="left")
+                    query = rt[column[col].str.lower().str.contains(pattern.lower(), na=False)]
+                    if not query.empty:
+                        df_merge = query.merge(alt.drop(columns=[col for col in query.columns[1:]] + ["0"]),
+                                               left_on="id", right_on="id",  how="left")
                         results.append(df_merge)
                         break
         if column is not None and column.size == 0:
@@ -59,6 +59,8 @@ def access_data(pattern="", location=".*", training=True):
                                               .apply(lambda x: ", ".join(x.drop_duplicates()), axis=1))
             df_data = (df_data.drop(columns=df_data.columns[14:287]).replace("NA (NA)", np.nan)
                        .set_index(df_data["id"].str[0:4].astype(int)))
+            # formula_inchi = df_data[df_data["formula"] != df_data["inchi.std"].str.split("/", expand=False).str[1]]
+            # df_data["formula"] = df_data["inchi.std"].str.split("/", expand=False).str[1]
             column_data = Gradient_data.gradient_data(training)
             df = pd.merge(df_data, column_data, left_index=True, right_index=True, how="inner")
             return df
